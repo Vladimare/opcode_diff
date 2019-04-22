@@ -1,0 +1,149 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import subprocess
+import argparse
+
+class bcolors:
+    MAGENTA = '\033[95m'
+    CYAN = '\033[96m'
+    BLUE = '\033[94m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--mode', '-m', action='store', default='arm', choices=['arm', 'thumb'], help='instruction mode: arm or thumb')
+parser.add_argument('--verbose', '-v', action='store_true', default=False, help='print commands')
+parser.add_argument('binary', nargs=2, help='binaries to compare')
+args = parser.parse_args()
+
+def process_cmd(cmd):
+    if args.verbose:
+        print ' + ' + cmd
+    proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return proc
+
+cmd = ' '.join(["cmp", "-l", args.binary[0], args.binary[1]])
+proc = process_cmd(cmd)
+lines = []
+while True:
+    line = proc.stdout.readline()
+    lines.append(line)
+    if not line:
+        break
+
+compare = []
+for line in lines:
+    line = ' '.join(line.split())
+    numbers = line.split(' ')
+    if len(numbers) == 3:
+        bytediff = {'address':int(numbers[0]), 'byte1':int(numbers[1], 8), 'byte2':int(numbers[2], 8)}
+        compare.append(bytediff)
+
+sequences1 = {}
+sequences2 = {}
+string1 = '0x%02x ' % compare[0]['byte1']
+string2 = '0x%02x ' % compare[0]['byte2']
+address = compare[0]['address']
+for i in range(1, len(compare)):
+    if compare[i]['address'] - compare[i - 1]['address'] == 1:
+        byte1 = '0x%02x ' % compare[i]['byte1']
+        byte2 = '0x%02x ' % compare[i]['byte2']
+        string1 = string1 + byte1
+        string2 = string2 + byte2
+    else:
+        sequences1[address] = ' '.join(string1.split())
+        sequences2[address] = ' '.join(string2.split())
+        string1 = '0x%02x ' % compare[i]['byte1']
+        string2 = '0x%02x ' % compare[i]['byte2']
+        address = compare[i]['address']
+
+def print_instruction(out, address, align, color):
+    lines = out.split('\n')
+    next_address = address
+    next_address_string = '0x%08x' % (next_address)
+    for line in lines:
+        string = ' '.join(line.split())
+        if not 'text' in string and string != '':
+            if color:
+                print color + next_address_string + ':\t' + string + bcolors.ENDC
+            else:
+                print next_address_string + ':\t' + string
+            next_address = next_address + align
+            next_address_string = '0x%08x' % (next_address)
+
+def process_opcode(opcode, mode='arm'):
+    cmd = "echo '" + opcode + "' | llvm-mc -triple=" + mode + "v7 --disassemble"
+    proc = process_cmd(cmd)
+    out, err = proc.communicate()
+    if not err:
+        return out
+    else:
+        return None
+
+def convert_opcode(opcode, address, mode='arm', color=None):
+    out = process_opcode(opcode, mode)
+    step = 4
+    if mode == 'thumb':
+        step = 2
+    if out:
+        print_instruction(out, address, step, color)
+    elif mode == 'thumb':
+        convert_opcode(opcode, address, 'arm', color)
+    else:
+        address_string = '0x%08x' % (address)
+        if color:
+            print color + address_string + ':\t' + opcode + bcolors.ENDC
+        else:
+            print address_string + ':\t' + opcode
+
+def read_bytes(address, step, binary):
+    cmd = 'hexdump -n ' + repr(step)+ ' -s ' + repr(address) + ' -v -e \'"0x" 1/1 "%02X" " "\' ' + binary
+    proc = process_cmd(cmd)
+    out, err = proc.communicate()
+    return out
+
+print '------------------------------------------------------------'
+step = 4
+if args.mode == 'thumb':
+    step = 2
+for address in sequences1:
+    opcode1 = sequences1[address]
+    opcode2 = sequences2[address]
+    print 'Opcode1: ' + opcode1
+    print 'Opcode2: ' + opcode2
+    print 'Address: 0x%08x' % address
+    address_before = (address & ~3) - (8 if args.mode == 'arm' else 4)
+    if address & 2:
+        args.mode = 'thumb'
+        address_before = address_before | 2
+        step = 2
+    print 'ARM instruction mode: ' + args.mode
+    length = 0 if len(opcode1.split(' ')) < step else len(opcode1.split(' '))
+    address_after = (address & ~1) + length
+    out = read_bytes(address_before, step * 2, args.binary[0])
+    convert_opcode(out, address_before, args.mode)
+    if length == 0:
+        out = read_bytes(address_after, step, args.binary[0])
+        convert_opcode(out, address_after, args.mode, bcolors.RED)
+        out = read_bytes(address_after, step, args.binary[1])
+        convert_opcode(out, address_after, args.mode, bcolors.GREEN)
+        address_after = address_after + step
+    else:
+        if address & 1:
+            out = read_bytes(address & ~1, step, args.binary[0])
+            convert_opcode(out, address & ~1, args.mode, bcolors.RED)
+            out = read_bytes(address & ~1, step, args.binary[1])
+            convert_opcode(out, address & ~1, args.mode, bcolors.GREEN)
+        else:
+            convert_opcode(opcode1, address, args.mode, bcolors.RED)
+            convert_opcode(opcode2, address, args.mode, bcolors.GREEN)
+    out = read_bytes(address_after, step * 2, args.binary[0])
+    convert_opcode(out, address_after, args.mode)
+    print '------------------------------------------------------------'
+
