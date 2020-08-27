@@ -6,17 +6,10 @@ from sortedcontainers import SortedDict
 import subprocess as sp
 import sys
 
-class bcolors:
-    MAGENTA = '\033[95m'
-    CYAN = '\033[96m'
-    BLUE = '\033[94m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    RED = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
+# local import
+from bcolors import colors
 
+# commands
 parser = argparse.ArgumentParser()
 parser.add_argument('--mode', '-m', action='store', default='arm', choices=['arm', 'thumb'], help='instruction mode: arm or thumb')
 parser.add_argument('--verbose', '-v', action='store_true', default=False, help='print commands')
@@ -57,7 +50,7 @@ while diff:
 
 def print_colored(string, color=None):
     if color:
-        print(color + string + bcolors.ENDC)
+        print(color + string + colors.ENDC)
     print(string)
 
 def print_instruction(out, address, align, color):
@@ -117,19 +110,19 @@ for address in sequences1:
     convert_opcode(out, address_before, args.mode)
     if length == 0:
         out = read_bytes(address_after, step, args.binary[0])
-        convert_opcode(out, address_after, args.mode, bcolors.RED)
+        convert_opcode(out, address_after, args.mode, colors.RED)
         out = read_bytes(address_after, step, args.binary[1])
-        convert_opcode(out, address_after, args.mode, bcolors.GREEN)
+        convert_opcode(out, address_after, args.mode, colors.GREEN)
         address_after = address_after + step
     else:
         if address & 1:
             out = read_bytes(address & ~1, step, args.binary[0])
-            convert_opcode(out, address & ~1, args.mode, bcolors.RED)
+            convert_opcode(out, address & ~1, args.mode, colors.RED)
             out = read_bytes(address & ~1, step, args.binary[1])
-            convert_opcode(out, address & ~1, args.mode, bcolors.GREEN)
+            convert_opcode(out, address & ~1, args.mode, colors.GREEN)
         else:
-            convert_opcode(opcode1, address, args.mode, bcolors.RED)
-            convert_opcode(opcode2, address, args.mode, bcolors.GREEN)
+            convert_opcode(opcode1, address, args.mode, colors.RED)
+            convert_opcode(opcode2, address, args.mode, colors.GREEN)
     out = read_bytes(address_after, step * 2, args.binary[0])
     convert_opcode(out, address_after, args.mode)
     print(delimeter)
