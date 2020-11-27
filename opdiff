@@ -1,20 +1,20 @@
 #!/usr/bin/env python
 
 import argparse
-import os
 from sortedcontainers import SortedDict
 import subprocess as sp
-import sys
 
 # local import
 from bcolors import colors
 
 # commands
 parser = argparse.ArgumentParser()
-parser.add_argument('--mode', '-m', action='store', default='arm', choices=['arm', 'thumb'], help='instruction mode: arm or thumb')
+parser.add_argument('--mode', '-m', action='store', default='arm', choices=['arm', 'thumb'],
+                    help='instruction mode: arm or thumb')
 parser.add_argument('--verbose', '-v', action='store_true', default=False, help='print commands')
 parser.add_argument('binary', nargs=2, help='binaries to compare')
 args = parser.parse_args()
+
 
 def process_cmd(cmd, communicate=True):
     if args.verbose:
@@ -24,88 +24,95 @@ def process_cmd(cmd, communicate=True):
         return proc.communicate()
     return proc
 
-cmd = ' '.join(["cmp", "-l", args.binary[0], args.binary[1]])
-lines = process_cmd(cmd, False).stdout.readlines()
+
+command = ' '.join(["cmp", "-l", args.binary[0], args.binary[1]])
+output = process_cmd(command, False).stdout.readlines()
 
 diff = SortedDict()
-for line in lines:
-    n = line.split()
+for output_line in output:
+    n = output_line.split()
     if len(n) == 3:
         diff[n[0]] = [hex(int(n[1], 8)), hex(int(n[2], 8))]
 
 sequences1 = {}
 sequences2 = {}
-address, strings = diff.popitem(0)
+shift, strings = diff.popitem(0)
 while diff:
     next_address, _bytes = diff.popitem(0)
-    if next_address - address < 2:
+    if next_address - shift < 2:
         strings[0] += _bytes[0]
         strings[1] += _bytes[1]
     else:
-        sequences1[address] = ' '.join(strings[0].split())
-        sequences2[address] = ' '.join(strings[1].split())
+        sequences1[shift] = ' '.join(strings[0].split())
+        sequences2[shift] = ' '.join(strings[1].split())
         strings[0] += _bytes[0]
         strings[1] += _bytes[1]
-        address = next_address
+        shift = next_address
+
 
 def print_colored(string, color=None):
     if color:
         print(color + string + colors.ENDC)
     print(string)
 
-def print_instruction(out, address, align, color):
-    lines = out.split('\n')
-    next_address = address
-    next_address_string = '0x%08x' % (next_address)
+
+def print_instruction(text, address, align, color):
+    lines = text.split('\n')
+    _next_address = address
+    next_address_string = '0x%08x' % _next_address
     for line in lines:
         string = ' '.join(line.split())
-        if not 'text' in string and string != '':
+        if 'text' not in string and string != '':
             instruction = next_address_string + ':\t' + string
             print_colored(instruction, color)
-            next_address += align
-            next_address_string = '0x%08x' % (next_address)
+            _next_address += align
+            next_address_string = '0x%08x' % _next_address
+
 
 def process_opcode(opcode, mode='arm'):
     cmd = "echo '" + opcode + "' | llvm-mc -triple=" + mode + "v7 --disassemble"
-    out, err = process_cmd(cmd)
+    _out, err = process_cmd(cmd)
     if err:
         return None
-    return out
+    return _out
+
 
 def convert_opcode(opcode, address, mode='arm', color=None):
-    out = process_opcode(opcode, mode)
-    step = 4 if mode == 'arm' else 2
-    if out:
-        print_instruction(out, address, step, color)
+    _out = process_opcode(opcode, mode)
+    _step = 4 if mode == 'arm' else 2
+    if _out:
+        print_instruction(_out, address, _step, color)
     elif mode == 'thumb':
         convert_opcode(opcode, address, 'arm', color)
     else:
-        string = '0x%08x' % (address) + ':\t' + opcode
+        address_string = '0x%08x' % address + ':\t' + opcode
         print_colored(address_string, color)
 
-def read_bytes(address, step, binary):
-    cmd = ' '.join('hexdump', '-n', repr(step), '-s', repr(address),
-                   '-v', '-e', '\'"0x"', '1/1', '"%02X"', '"\'', binary)
-    out, _ = process_cmd(cmd)
-    return out
 
-delimeter = '------------------------------------------------------------'
-print(delimeter)
+def read_bytes(address, byte_length, binary):
+    cmd = ' '.join(('hexdump', '-n', repr(byte_length), '-s', repr(address),
+                   '-v', '-e', '\'"0x"', '1/1', '"%02X"', '"\'', binary))
+    _out, _ = process_cmd(cmd)
+    return _out
+
+
+delimiter = '------------------------------------------------------------'
+print(delimiter)
 step = 4 if args.mode == 'arm' else 2
-for address in sequences1:
-    opcode1 = sequences1[address]
-    opcode2 = sequences2[address]
+for shift in sequences1:
+    opcode1 = sequences1[shift]
+    opcode2 = sequences2[shift]
     print('Opcode1: ' + opcode1)
     print('Opcode2: ' + opcode2)
-    print('Address: 0x%08x' % address)
-    address_before = (address & ~3) - (8 if args.mode == 'arm' else 4)
-    if address & 2:
+    print('Address: 0x%08x' % shift)
+    address_before = (shift & ~3) - (8 if args.mode == 'arm' else 4)
+    if shift & 2:
         args.mode = 'thumb'
         address_before = address_before | 2
         step = 2
     print('ARM instruction mode: ' + args.mode)
     length = 0 if len(opcode1.split(' ')) < step else len(opcode1.split(' '))
-    address_after = (address & ~1) + length
+    address_after = (shift & ~1) + length
     out = read_bytes(address_before, step * 2, args.binary[0])
     convert_opcode(out, address_before, args.mode)
     if length == 0:
@@ -115,15 +122,14 @@ for address in sequences1:
         convert_opcode(out, address_after, args.mode, colors.GREEN)
         address_after = address_after + step
     else:
-        if address & 1:
-            out = read_bytes(address & ~1, step, args.binary[0])
-            convert_opcode(out, address & ~1, args.mode, colors.RED)
-            out = read_bytes(address & ~1, step, args.binary[1])
-            convert_opcode(out, address & ~1, args.mode, colors.GREEN)
+        if shift & 1:
+            out = read_bytes(shift & ~1, step, args.binary[0])
+            convert_opcode(out, shift & ~1, args.mode, colors.RED)
+            out = read_bytes(shift & ~1, step, args.binary[1])
+            convert_opcode(out, shift & ~1, args.mode, colors.GREEN)
         else:
-            convert_opcode(opcode1, address, args.mode, colors.RED)
-            convert_opcode(opcode2, address, args.mode, colors.GREEN)
+            convert_opcode(opcode1, shift, args.mode, colors.RED)
+            convert_opcode(opcode2, shift, args.mode, colors.GREEN)
     out = read_bytes(address_after, step * 2, args.binary[0])
     convert_opcode(out, address_after, args.mode)
-    print(delimeter)
-
+    print(delimiter)
