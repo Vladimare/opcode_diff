@@ -55,7 +55,8 @@ while diff:
 def print_colored(string, color=None):
     if color:
         print(color + string + colors.ENDC)
-    print(string)
+    else:
+        print(string)
 
 
 def print_instruction(text, address, align, color):
