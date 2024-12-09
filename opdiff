@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import argparse
+import mmap
 from sortedcontainers import SortedDict
 import subprocess as sp
 
@@ -25,30 +26,38 @@ def process_cmd(cmd, communicate=True):
     return proc
 
 
-command = ' '.join(["cmp", "-l", args.binary[0], args.binary[1]])
-output = process_cmd(command, False).stdout.readlines()
-
+f1 = open(args.binary[0], 'rb')
+binary1 = mmap.mmap(f1.fileno(), length=0, access=mmap.ACCESS_READ)
+f1.close()
+f2 = open(args.binary[1], 'rb')
+binary2 = mmap.mmap(f2.fileno(), length=0, access=mmap.ACCESS_READ)
+f2.close()
+print(f'compare result: {binary1==binary2}')
 diff = SortedDict()
-for output_line in output:
-    n = output_line.split()
-    if len(n) == 3:
-        diff[n[0]] = [hex(int(n[1], 8)), hex(int(n[2], 8))]
-    else:
-        raise RuntimeError("Unexpected output")
+x = 0
+for i, (first, second) in enumerate(zip(binary1, binary2)):
+    if first != second:
+        diff[i] = [first.hex(), second.hex()]
+        if x < 10:
+            print(f'{i}: {first} - {second}')
+            x += 1
+
 
 sequences1 = {}
 sequences2 = {}
 shift, strings = diff.popitem(0)
+start = shift
+print(f'shift: {shift}, strings: {strings}')
 while diff:
     next_address, _bytes = diff.popitem(0)
-    if next_address - shift < 2:
+    if int(next_address) - int(shift) < 2:
         strings[0] += _bytes[0]
         strings[1] += _bytes[1]
     else:
         sequences1[shift] = ' '.join(strings[0].split())
         sequences2[shift] = ' '.join(strings[1].split())
-        strings[0] += _bytes[0]
-        strings[1] += _bytes[1]
+        strings[0] = _bytes[0]
+        strings[1] = _bytes[1]
         shift = next_address
 
 
@@ -73,7 +82,7 @@ def print_instruction(text, address, align, color):
 
 
 def process_opcode(opcode, mode='arm'):
-    cmd = "echo '" + opcode + "' | llvm-mc -triple=" + mode + "v7 --disassemble"
+    cmd = f"echo '{opcode}' | llvm-mc -triple={mode}v7 --disassemble"
     _out, err = process_cmd(cmd)
     if err:
         return None
@@ -88,22 +97,23 @@ def convert_opcode(opcode, address, mode='arm', color=None):
     elif mode == 'thumb':
         convert_opcode(opcode, address, 'arm', color)
     else:
-        address_string = '0x%08x' % address + ':\t' + opcode
+        address_string = '0x%08x' % address + f':\t{opcode}'
         print_colored(address_string, color)
 
 
-def read_bytes(address, byte_length, binary):
+def read_bytes(address, length, binary):
     """Read bytes from the binary
 
     :param address: Start address in the binary
-    :param byte_length: Number of bytes to read
+    :param length: Number of bytes to read
     :param binary: Binary file
-    :returns: Hexdump command output
+    :returns: bytearray
     """
-    cmd = ' '.join(('hexdump', '-n', repr(byte_length), '-s', repr(address),
-                   '-v', '-e', '\'"0x"', '1/1', '"%02X"', '"\'', binary))
-    _out, _ = process_cmd(cmd)
-    return _out
+    start = address
+    end = start + length + 1
+    res = ''.join(format(x, '02x') for x in binary[start:end])
+    print(f'start: {start}, end: {end}, res: {res}')
+    return res
 
 
 delimiter = '------------------------------------------------------------'
@@ -115,36 +125,36 @@ for shift in sequences1:
     opcode2 = sequences2[shift]
     print('Opcode1: ' + opcode1)
     print('Opcode2: ' + opcode2)
-    print('Address: 0x%08x' % shift)
-    address_before = (shift & ~3) - (8 if args.mode == 'arm' else 4)
+    print('Address: 0x%08x' % int(shift))
+    address_before = (int(shift) & ~3) - (8 if args.mode == 'arm' else 4)
 
-    if shift & 2:
+    if int(shift) & 2:
         args.mode = 'thumb'
         address_before = address_before | 2
         step = 2
 
     print('ARM instruction mode: ' + args.mode)
     length = 0 if len(opcode1.split(' ')) < step else len(opcode1.split(' '))
-    address_after = (shift & ~1) + length
-    out = read_bytes(address_before, step * 2, args.binary[0])
+    address_after = (int(shift) & ~1) + length
+    out = read_bytes(address_before, step * 2, binary1)
     convert_opcode(out, address_before, args.mode)
 
     if length == 0:
-        out = read_bytes(address_after, step, args.binary[0])
+        out = read_bytes(address_after, step, binary1)
         convert_opcode(out, address_after, args.mode, colors.RED)
-        out = read_bytes(address_after, step, args.binary[1])
+        out = read_bytes(address_after, step, binary2)
         convert_opcode(out, address_after, args.mode, colors.GREEN)
         address_after = address_after + step
     else:
         if shift & 1:
-            out = read_bytes(shift & ~1, step, args.binary[0])
+            out = read_bytes(shift & ~1, step, binary1)
             convert_opcode(out, shift & ~1, args.mode, colors.RED)
-            out = read_bytes(shift & ~1, step, args.binary[1])
+            out = read_bytes(shift & ~1, step, binary2)
             convert_opcode(out, shift & ~1, args.mode, colors.GREEN)
         else:
             convert_opcode(opcode1, shift, args.mode, colors.RED)
             convert_opcode(opcode2, shift, args.mode, colors.GREEN)
 
-    out = read_bytes(address_after, step * 2, args.binary[0])
+    out = read_bytes(address_after, step * 2, binary1)
     convert_opcode(out, address_after, args.mode)
     print(delimiter)
